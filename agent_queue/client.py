@@ -22,7 +22,7 @@ def run_cmd(cmd: list[str], timeout: float = 10.0) -> str:
         )
         if res.returncode != 0:
             return ""
-        return res.stdout
+        return res.stdout or "ok"
     except (OSError, subprocess.TimeoutExpired):
         return ""
 
@@ -68,12 +68,16 @@ class HerdrClient:
         self,
         pane_id: str,
         tab_id: str | None = None,
+        workspace_id: str | None = None,
         machine: str | None = None,
     ) -> bool:
-        """Focus an agent pane and its corresponding tab."""
+        """Focus an agent pane, its tab, and optionally its workspace."""
         base_cmd = [self.bin]
         if machine and machine != "Local":
             base_cmd.extend(["--machine", machine])
+
+        if workspace_id:
+            run_cmd(base_cmd + ["workspace", "focus", workspace_id])
 
         agent_res = run_cmd(base_cmd + ["agent", "focus", pane_id])
         if tab_id:

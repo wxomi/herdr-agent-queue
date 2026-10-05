@@ -16,6 +16,7 @@ class QueueItem:
     machine: str
     pane_id: str
     tab_id: str = ""
+    workspace_id: str = ""
     title: str = ""
     finished_at: float = dataclasses.field(default_factory=time.time)
 
@@ -28,6 +29,7 @@ class QueueItem:
             machine=data.get("machine", "Local"),
             pane_id=data.get("pane_id", ""),
             tab_id=data.get("tab_id", ""),
+            workspace_id=data.get("workspace_id", ""),
             title=data.get("title", ""),
             finished_at=data.get("finished_at", time.time()),
         )
