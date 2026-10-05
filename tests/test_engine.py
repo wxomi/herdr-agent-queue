@@ -129,7 +129,36 @@ class TestQueueEngine(unittest.TestCase):
         val = engine.toggle_auto()
         self.assertTrue(val)
         self.assertTrue(self.state.auto_advance)
-        self.mock_client.show_toast.assert_called()
+        self.mock_client.show_toast.assert_called_with(
+            "⚡ Autopilot: ON",
+            body="Conveyor mode active: auto-advances to next waiting agent on reply.",
+            sound="done",
+            position="top-right",
+        )
+        self.mock_client.show_system_notification.assert_called()
+
+        # Toggle OFF
+        val2 = engine.toggle_auto()
+        self.assertFalse(val2)
+        self.assertFalse(self.state.auto_advance)
+        self.mock_client.show_toast.assert_called_with(
+            "⏸ Autopilot: OFF",
+            body="Manual mode: press Option+Right (⌥→) to advance.",
+            sound="request",
+            position="top-right",
+        )
+
+    def test_show_status(self):
+        engine = QueueEngine(self.state, self.mock_client)
+        self.state.push(QueueItem(machine="Local", pane_id="p1", title="Task 1"))
+        info = engine.show_status()
+        self.assertEqual(info["queue_count"], 1)
+        self.mock_client.show_toast.assert_called_with(
+            "⏸ Autopilot: OFF",
+            body="1 waiting agent • Next: Task 1",
+            sound="none",
+            position="top-right",
+        )
 
 
 if __name__ == "__main__":

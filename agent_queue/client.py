@@ -89,9 +89,44 @@ class HerdrClient:
         title: str,
         body: str | None = None,
         sound: str = "none",
+        position: str = "top-right",
     ) -> None:
         """Display a Herdr toast notification."""
-        cmd = [self.bin, "notification", "show", title, "--sound", sound]
+        cmd = [self.bin, "notification", "show", title, "--sound", sound, "--position", position]
         if body:
             cmd.extend(["--body", body])
         run_cmd(cmd)
+
+    def show_system_notification(
+        self,
+        title: str,
+        message: str,
+        subtitle: str | None = None,
+    ) -> None:
+        """Display an OS-native desktop notification (macOS or Linux)."""
+        if sys.platform == "darwin":
+            sub_part = f' subtitle "{subtitle}"' if subtitle else ""
+            # Escape quotes in message/title/subtitle for AppleScript
+            msg_clean = message.replace('"', '\\"')
+            title_clean = title.replace('"', '\\"')
+            script = f'display notification "{msg_clean}" with title "{title_clean}"{sub_part}'
+            try:
+                subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    timeout=2.0,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        elif sys.platform.startswith("linux"):
+            summary = f"{title}: {subtitle}" if subtitle else title
+            try:
+                subprocess.run(
+                    ["notify-send", summary, message],
+                    capture_output=True,
+                    timeout=2.0,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass

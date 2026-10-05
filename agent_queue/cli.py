@@ -67,10 +67,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if cmd == "toggle":
-        engine.toggle_auto()
+        enabled = engine.toggle_auto()
+        print(f"Autopilot: {'ENABLED (auto-advancing on reply)' if enabled else 'DISABLED (manual Option+Right)'}")
         return 0
 
     if cmd == "status":
+        engine.show_status()
         daemon_status = get_daemon_status()
         state.load()
         status_line = (

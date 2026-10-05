@@ -115,6 +115,7 @@ class QueueEngine:
     def advance_next(self, current_pane_id: str | None = None) -> bool:
         """Jump to the next waiting agent in queue, or fallback to cycling waiting agents."""
         item = self.state.pop_next(current_pane_id=current_pane_id)
+        auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         if item:
             self.client.focus_agent(
                 item.pane_id,
@@ -126,8 +127,9 @@ class QueueEngine:
             rem_text = f"{rem} left in queue" if rem > 0 else "Queue now empty"
             self.client.show_toast(
                 f"Next: {item.title or item.pane_id}",
-                body=f"[{item.machine}] {rem_text}",
+                body=f"[{item.machine}] {rem_text} • {auto_badge}",
                 sound="none",
+                position="top-right",
             )
             return True
 
@@ -137,6 +139,7 @@ class QueueEngine:
     def advance_prev(self, current_pane_id: str | None = None) -> bool:
         """Backtrack to the previously visited agent in queue history, or fallback to reverse cycling."""
         item = self.state.pop_prev(current_pane_id=current_pane_id)
+        auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         if item:
             self.client.focus_agent(
                 item.pane_id,
@@ -146,8 +149,9 @@ class QueueEngine:
             )
             self.client.show_toast(
                 f"Backtrack: {item.title or item.pane_id}",
-                body=f"[{item.machine}] Returned to previous agent",
+                body=f"[{item.machine}] Returned to previous agent • {auto_badge}",
                 sound="none",
+                position="top-right",
             )
             return True
 
@@ -162,6 +166,7 @@ class QueueEngine:
                 "No agents found",
                 body="No running agents detected on this machine.",
                 sound="none",
+                position="top-right",
             )
             return False
 
@@ -186,6 +191,7 @@ class QueueEngine:
                 "Only 1 agent available",
                 body=pool[0].get("title") or pool[0].get("pane_id", ""),
                 sound="none",
+                position="top-right",
             )
             return False
 
@@ -230,25 +236,59 @@ class QueueEngine:
         self.state.save()
 
         action_name = "Next" if direction > 0 else "Prev"
+        auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         self.client.show_toast(
             f"{action_name}: {target_title or target_pid}",
-            body=f"[{status_desc}] (queue empty: cycling waiting agents)",
+            body=f"[{status_desc}] {auto_badge} (cycling waiting agents)",
             sound="none",
+            position="top-right",
         )
         return True
 
     def toggle_auto(self) -> bool:
         """Toggle autopilot auto-advance on reply submission."""
         enabled = self.state.toggle_auto_advance()
-        status_text = "ON (conveyor mode)" if enabled else "OFF (manual Option+Right)"
+        status_tag = "⚡ Autopilot: ON" if enabled else "⏸ Autopilot: OFF"
         body_text = (
-            "Auto-advances when you submit a reply."
+            "Conveyor mode active: auto-advances to next waiting agent on reply."
             if enabled
-            else "Press Option+Right to jump to next agent."
+            else "Manual mode: press Option+Right (⌥→) to advance."
         )
+        sound = "done" if enabled else "request"
+
+        # 1. Herdr in-app toast with audible chime
         self.client.show_toast(
-            f"Agent Queue Autopilot: {status_text}",
+            status_tag,
             body=body_text,
-            sound="none",
+            sound=sound,
+            position="top-right",
+        )
+
+        # 2. OS-level native notification banner
+        self.client.show_system_notification(
+            title="Herdr Agent Queue",
+            message=body_text,
+            subtitle=status_tag,
         )
         return enabled
+
+    def show_status(self) -> dict[str, Any]:
+        """Display status notification and return current state info."""
+        self.state.load()
+        auto_badge = "⚡ Autopilot: ON" if self.state.auto_advance else "⏸ Autopilot: OFF"
+        q_count = len(self.state.queue)
+        top_info = f"Next: {self.state.queue[0].title}" if q_count > 0 else "All agents handled"
+        body_text = f"{q_count} waiting agent{'s' if q_count != 1 else ''} • {top_info}"
+
+        self.client.show_toast(
+            auto_badge,
+            body=body_text,
+            sound="none",
+            position="top-right",
+        )
+        return {
+            "auto_advance": self.state.auto_advance,
+            "queue_count": q_count,
+            "queue": self.state.queue,
+            "history": self.state.history,
+        }
