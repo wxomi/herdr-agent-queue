@@ -45,6 +45,7 @@ class QueueState:
 
     def push(self, item: QueueItem) -> bool:
         """Push a newly finished agent to queue. Return False if already queued."""
+        self.load()
         for existing in self.queue:
             if existing.machine == item.machine and existing.pane_id == item.pane_id:
                 return False
@@ -54,6 +55,7 @@ class QueueState:
 
     def pop_next(self, current_pane_id: str | None = None) -> QueueItem | None:
         """Pop the next waiting agent. Skip current_pane_id if at head."""
+        self.load()
         if not self.queue:
             return None
         idx = 0
@@ -69,6 +71,7 @@ class QueueState:
 
     def pop_prev(self, current_pane_id: str | None = None) -> QueueItem | None:
         """Backtrack to the previously visited agent in history."""
+        self.load()
         if not self.history:
             return None
         # Pop from end, skipping current pane if at top
@@ -82,14 +85,18 @@ class QueueState:
 
     def remove(self, pane_id: str, machine: str | None = None) -> None:
         """Remove a pane from queue when user manually visits or closes it."""
+        self.load()
+        orig_len = len(self.queue)
         self.queue = [
             q for q in self.queue
             if not (q.pane_id == pane_id and (machine is None or q.machine == machine))
         ]
-        self.save()
+        if len(self.queue) != orig_len:
+            self.save()
 
     def toggle_auto_advance(self) -> bool:
         """Toggle autopilot auto-advance on reply."""
+        self.load()
         self.auto_advance = not self.auto_advance
         self.save()
         return self.auto_advance

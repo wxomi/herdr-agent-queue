@@ -8,22 +8,22 @@ platforms = ["linux", "macos"]
 [[actions]]
 id = "next"
 title = "Jump to next agent in attention queue"
-command = ["python3", "-m", "agent_queue", "next"]
+command = ["./run.sh", "next"]
 
 [[actions]]
 id = "prev"
 title = "Jump to previous agent in attention queue"
-command = ["python3", "-m", "agent_queue", "prev"]
+command = ["./run.sh", "prev"]
 
 [[actions]]
 id = "toggle"
 title = "Toggle autopilot auto-advance on reply"
-command = ["python3", "-m", "agent_queue", "toggle"]
+command = ["./run.sh", "toggle"]
 
 [[actions]]
 id = "status"
 title = "Show attention queue status"
-command = ["python3", "-m", "agent_queue", "status"]
+command = ["./run.sh", "status"]
 
 [[startup]]
-command = ["python3", "-m", "agent_queue", "--watch"]
+command = ["./run.sh", "--watch"]
