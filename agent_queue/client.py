@@ -142,6 +142,16 @@ class HerdrClient:
             agent_res = run_cmd(base_cmd + ["agent", "focus", pane_id])
             if tab_id:
                 run_cmd(base_cmd + ["tab", "focus", tab_id])
+            if sys.platform == "darwin":
+                try:
+                    subprocess.run(
+                        ["osascript", "-e", 'tell application "System Events" to key code 45 using {option down}'],
+                        capture_output=True,
+                        timeout=1.0,
+                        check=False,
+                    )
+                except Exception:
+                    pass
             return bool(agent_res)
 
         # Local machine: use direct Unix domain socket (<1ms total)

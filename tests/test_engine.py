@@ -124,6 +124,20 @@ class TestQueueEngine(unittest.TestCase):
         self.assertTrue(res2)
         self.mock_client.focus_agent.assert_called_with("p3", tab_id="t3", workspace_id="w1", machine="Local")
 
+    def test_cycle_agents_cross_machine_recency(self):
+        engine = QueueEngine(self.state, self.mock_client)
+        self.mock_client.list_machines.return_value = ["notebook"]
+        self.mock_client.list_agents.side_effect = lambda m: [
+            {"pane_id": "pLocal", "tab_id": "tL", "workspace_id": "wL", "agent_status": "idle", "focused": True, "title": "LocalAgent", "state_change_seq": 100}
+        ] if m == "Local" else [
+            {"pane_id": "pRemote", "tab_id": "tR", "workspace_id": "wR", "agent_status": "idle", "focused": False, "title": "RemoteAgent", "state_change_seq": 2000}
+        ]
+
+        # Empty queue: should cycle to pRemote because its state_change_seq (2000) > pLocal (100)
+        res = engine.advance_next(current_pane_id="pLocal")
+        self.assertTrue(res)
+        self.mock_client.focus_agent.assert_called_with("pRemote", tab_id="tR", workspace_id="wR", machine="notebook")
+
     def test_toggle_auto(self):
         engine = QueueEngine(self.state, self.mock_client)
         val = engine.toggle_auto()

@@ -197,11 +197,27 @@ class QueueEngine:
 
     def _cycle_agents(self, direction: int, current_pane_id: str | None = None) -> bool:
         """Cycle through waiting agents when queue/history is empty."""
-        local_agents = self.client.list_agents("Local")
-        if not local_agents:
+        all_agents: list[tuple[str, dict[str, Any]]] = []
+        for a in self.client.list_agents("Local"):
+            if a.get("pane_id"):
+                all_agents.append(("Local", a))
+
+        for m in self.client.list_machines():
+            remote_agents = self._remote_cache.get(m, [])
+            if not remote_agents:
+                try:
+                    remote_agents = self.client.list_agents(m)
+                    self._remote_cache[m] = remote_agents
+                except Exception:
+                    pass
+            for a in remote_agents:
+                if a.get("pane_id"):
+                    all_agents.append((m, a))
+
+        if not all_agents:
             self.client.show_toast(
                 "No agents found",
-                body="No running agents detected on this machine.",
+                body="No running agents detected on this or remote machines.",
                 sound="none",
                 position="top-right",
             )
@@ -210,23 +226,26 @@ class QueueEngine:
         # Identify currently focused pane if not explicitly given
         current_pid = current_pane_id
         if not current_pid:
-            for a in local_agents:
+            for m, a in all_agents:
                 if a.get("focused"):
                     current_pid = a.get("pane_id")
                     break
 
         # Prioritize agents waiting for input (idle, blocked, done)
         waiting = [
-            a for a in local_agents
+            (m, a) for m, a in all_agents
             if a.get("agent_status") in ("idle", "blocked", "done")
         ]
-        pool = waiting if waiting else local_agents
+        # Sort waiting agents by state_change_seq descending (most recent first)
+        waiting.sort(key=lambda pair: int(pair[1].get("state_change_seq") or 0), reverse=True)
+
+        pool = waiting if waiting else all_agents
 
         # If only 1 agent in pool and it's already current
-        if len(pool) == 1 and pool[0].get("pane_id") == current_pid:
+        if len(pool) == 1 and pool[0][1].get("pane_id") == current_pid:
             self.client.show_toast(
                 "Only 1 agent available",
-                body=pool[0].get("title") or pool[0].get("pane_id", ""),
+                body=pool[0][1].get("title") or pool[0][1].get("pane_id", ""),
                 sound="none",
                 position="top-right",
             )
@@ -234,7 +253,7 @@ class QueueEngine:
 
         # Find current index in pool
         curr_idx = -1
-        for idx, a in enumerate(pool):
+        for idx, (m, a) in enumerate(pool):
             if a.get("pane_id") == current_pid:
                 curr_idx = idx
                 break
@@ -243,10 +262,10 @@ class QueueEngine:
             target_idx = 0 if direction > 0 else len(pool) - 1
         else:
             target_idx = (curr_idx + direction) % len(pool)
-            if len(pool) > 1 and pool[target_idx].get("pane_id") == current_pid:
+            if len(pool) > 1 and pool[target_idx][1].get("pane_id") == current_pid:
                 target_idx = (target_idx + direction) % len(pool)
 
-        target = pool[target_idx]
+        target_machine, target = pool[target_idx]
         target_pid = str(target.get("pane_id", ""))
         target_tab = str(target.get("tab_id", "") or "")
         target_ws = str(target.get("workspace_id", "") or "")
@@ -257,15 +276,16 @@ class QueueEngine:
             target_pid,
             tab_id=target_tab,
             workspace_id=target_ws,
-            machine="Local",
+            machine=target_machine,
         )
 
         hist_item = QueueItem(
-            machine="Local",
+            machine=target_machine,
             pane_id=target_pid,
             tab_id=target_tab,
             workspace_id=target_ws,
             title=target_title,
+            seq=int(target.get("state_change_seq") or 0),
         )
         self.state.history.append(hist_item)
         if len(self.state.history) > 30:
@@ -276,7 +296,7 @@ class QueueEngine:
         auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         self.client.show_toast(
             f"{action_name}: {target_title or target_pid}",
-            body=f"[{status_desc}] {auto_badge} (cycling waiting agents)",
+            body=f"[{target_machine}] [{status_desc}] {auto_badge}",
             sound="none",
             position="top-right",
         )
