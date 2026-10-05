@@ -18,6 +18,7 @@ class QueueItem:
     tab_id: str = ""
     workspace_id: str = ""
     title: str = ""
+    seq: int = 0
     finished_at: float = dataclasses.field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,6 +32,7 @@ class QueueItem:
             tab_id=data.get("tab_id", ""),
             workspace_id=data.get("workspace_id", ""),
             title=data.get("title", ""),
+            seq=data.get("seq", 0),
             finished_at=data.get("finished_at", time.time()),
         )
 
@@ -45,15 +47,30 @@ class QueueState:
         self.history: list[QueueItem] = []
         self.load()
 
-    def push(self, item: QueueItem) -> bool:
-        """Push a newly finished agent to queue. Return False if already queued."""
+    def push(self, item: QueueItem, check_history: bool = False) -> bool:
+        """Push a newly finished agent to queue. Return False if already queued or in history."""
         self.load()
         for existing in self.queue:
             if existing.machine == item.machine and existing.pane_id == item.pane_id:
                 return False
+        if check_history:
+            for hist in self.history:
+                if hist.machine == item.machine and hist.pane_id == item.pane_id:
+                    return False
         self.queue.append(item)
         self.save()
         return True
+
+    def remove_from_history(self, pane_id: str, machine: str = "Local") -> None:
+        """Remove a pane from history when it transitions back to active/working."""
+        self.load()
+        orig_len = len(self.history)
+        self.history = [
+            h for h in self.history
+            if not (h.pane_id == pane_id and (machine is None or h.machine == machine))
+        ]
+        if len(self.history) != orig_len:
+            self.save()
 
     def pop_next(self, current_pane_id: str | None = None) -> QueueItem | None:
         """Pop the next waiting agent in FIFO order. Skips current_pane_id if at head."""

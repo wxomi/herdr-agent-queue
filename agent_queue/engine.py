@@ -74,12 +74,15 @@ class QueueEngine:
                 all_current.append((m, a))
                 if a.get("focused") and not new_focused:
                     new_focused = (m, pid)
+        to_seed: list[QueueItem] = []
+
         # Detect transitions
         for m, a in all_current:
             pid = a["pane_id"]
             curr_status = a.get("agent_status") or "unknown"
             key = (m, pid)
             prev_status = self.last_status.get(key)
+            seq = int(a.get("state_change_seq") or 0)
 
             if prev_status is None:
                 # Seed any existing waiting agent not currently focused (initial tick or newly discovered machine)
@@ -90,21 +93,24 @@ class QueueEngine:
                         tab_id=a.get("tab_id", ""),
                         workspace_id=a.get("workspace_id", ""),
                         title=a.get("title") or a.get("display_agent", ""),
+                        seq=seq,
                     )
-                    self.state.push(item)
+                    to_seed.append(item)
             elif prev_status != curr_status:
                 # 1. Completion transition: was working -> now idle/blocked/done
                 if prev_status == "working" and curr_status in ("idle", "blocked", "done"):
                     # Only queue if user is not actively focused on this pane
                     if self.focused_agent != key:
+                        self.state.remove_from_history(pid, machine=m)
                         item = QueueItem(
                             machine=m,
                             pane_id=pid,
                             tab_id=a.get("tab_id", ""),
                             workspace_id=a.get("workspace_id", ""),
                             title=a.get("title") or a.get("display_agent", ""),
+                            seq=seq,
                         )
-                        self.state.push(item)
+                        self.state.push(item, check_history=False)
 
                 # 2. Reply sent transition: focused pane was idle/blocked/done -> now working
                 if (
@@ -116,6 +122,13 @@ class QueueEngine:
                         self.advance_next(current_pane_id=pid)
 
             self.last_status[key] = curr_status
+
+        # Push seeded items: sort by state_change_seq descending (most recent first)
+        # and do not re-seed items already in visited history
+        if to_seed:
+            to_seed.sort(key=lambda x: x.seq, reverse=True)
+            for item in to_seed:
+                self.state.push(item, check_history=True)
 
         # If user manually focused a pane, remove it from waiting queue
         if new_focused:
