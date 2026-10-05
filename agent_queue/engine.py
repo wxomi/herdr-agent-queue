@@ -108,11 +108,11 @@ class QueueEngine:
     def toggle_auto(self) -> bool:
         """Toggle autopilot auto-advance on reply submission."""
         enabled = self.state.toggle_auto_advance()
-        status_text = "ON (conveyor mode)" if enabled else "OFF (manual Alt+Right)"
+        status_text = "ON (conveyor mode)" if enabled else "OFF (manual Option+Right)"
         body_text = (
             "Auto-advances when you submit a reply."
             if enabled
-            else "Press Alt+Right to jump to next agent."
+            else "Press Option+Right to jump to next agent."
         )
         self.client.show_toast(
             f"Agent Queue Autopilot: {status_text}",

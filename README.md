@@ -25,13 +25,13 @@ herdr plugin link ~/.local/share/herdr-agent-queue
 
 ```toml
 [[keys.command]]
-key = "alt+right"
+key = "option+right"
 type = "plugin_action"
 command = "wxomi.agent-queue.next"
 description = "jump to next agent waiting in attention queue"
 
 [[keys.command]]
-key = "alt+left"
+key = "option+left"
 type = "plugin_action"
 command = "wxomi.agent-queue.prev"
 description = "jump to previous agent in queue history"
