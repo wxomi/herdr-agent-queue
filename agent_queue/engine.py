@@ -113,8 +113,8 @@ class QueueEngine:
         self.focused_agent = new_focused
 
     def advance_next(self, current_pane_id: str | None = None) -> bool:
-        """Jump to the next waiting agent in queue, or fallback to cycling waiting agents."""
-        item = self.state.pop_next(current_pane_id=current_pane_id)
+        """Jump to the next waiting agent in queue, prioritizing local machine."""
+        item = self.state.pop_next_local(current_machine="Local", current_pane_id=current_pane_id)
         auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         if item:
             self.client.focus_agent(
@@ -123,22 +123,31 @@ class QueueEngine:
                 workspace_id=item.workspace_id,
                 machine=item.machine,
             )
-            rem = len(self.state.queue)
-            rem_text = f"{rem} left in queue" if rem > 0 else "Queue now empty"
+            local_rem = sum(1 for q in self.state.queue if q.machine == "Local")
+            remote_rem = len(self.state.queue) - local_rem
+            rem_parts = []
+            if local_rem > 0:
+                rem_parts.append(f"{local_rem} local left")
+            elif item.machine == "Local":
+                rem_parts.append("Local queue clear")
+            if remote_rem > 0:
+                rem_parts.append(f"{remote_rem} on remote")
+            rem_text = " • ".join(rem_parts) if rem_parts else "Queue now empty"
+
             self.client.show_toast(
                 f"Next: {item.title or item.pane_id}",
-                body=f"[{item.machine}] {rem_text} • {auto_badge}",
+                body=f"[{item.machine}] {rem_text} | {auto_badge}",
                 sound="none",
                 position="top-right",
             )
             return True
 
-        # Fallback: Attention queue is empty. Cycle through waiting agents.
+        # Fallback: Attention queue has no waiting agents. Cycle local waiting agents!
         return self._cycle_agents(direction=1, current_pane_id=current_pane_id)
 
     def advance_prev(self, current_pane_id: str | None = None) -> bool:
         """Backtrack to the previously visited agent in queue history, or fallback to reverse cycling."""
-        item = self.state.pop_prev(current_pane_id=current_pane_id)
+        item = self.state.pop_prev_local(current_machine="Local", current_pane_id=current_pane_id)
         auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         if item:
             self.client.focus_agent(
@@ -210,11 +219,11 @@ class QueueEngine:
                 target_idx = (target_idx + direction) % len(pool)
 
         target = pool[target_idx]
-        target_pid = target.get("pane_id", "")
-        target_tab = target.get("tab_id", "")
-        target_ws = target.get("workspace_id", "")
-        target_title = target.get("title") or target.get("display_agent", "")
-        status_desc = target.get("agent_status") or "active"
+        target_pid = str(target.get("pane_id", ""))
+        target_tab = str(target.get("tab_id", "") or "")
+        target_ws = str(target.get("workspace_id", "") or "")
+        target_title = str(target.get("title") or target.get("display_agent", "") or "")
+        status_desc = str(target.get("agent_status") or "active")
 
         self.client.focus_agent(
             target_pid,
