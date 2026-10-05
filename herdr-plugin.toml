@@ -1,0 +1,29 @@
+id = "wxomi.agent-queue"
+name = "Agent Attention Queue"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Hybrid keyboard-reflex and autopilot attention queue for AI agents across workspaces and machines"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "next"
+title = "Jump to next agent in attention queue"
+command = ["python3", "-m", "agent_queue", "next"]
+
+[[actions]]
+id = "prev"
+title = "Jump to previous agent in attention queue"
+command = ["python3", "-m", "agent_queue", "prev"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle autopilot auto-advance on reply"
+command = ["python3", "-m", "agent_queue", "toggle"]
+
+[[actions]]
+id = "status"
+title = "Show attention queue status"
+command = ["python3", "-m", "agent_queue", "status"]
+
+[[startup]]
+command = ["python3", "-m", "agent_queue", "--watch"]
