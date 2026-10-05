@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "toggle":
         enabled = engine.toggle_auto()
-        print(f"Autopilot: {'ENABLED (auto-advancing on reply)' if enabled else 'DISABLED (manual Option+Right)'}")
+        print(f"Autopilot: {'ENABLED (auto-advancing on reply)' if enabled else 'DISABLED (manual Option+n)'}")
         return 0
 
     if cmd == "status":
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Daemon: {'RUNNING (PID ' + str(daemon_status['pid']) + ')' if daemon_status['running'] else 'STOPPED'}"
         )
         print(status_line)
-        print(f"Autopilot: {'ENABLED (auto-advances on reply)' if state.auto_advance else 'DISABLED (manual Option+Right)'}")
+        print(f"Autopilot: {'ENABLED (auto-advances on reply)' if state.auto_advance else 'DISABLED (manual Option+n)'}")
         print(f"Queue count: {len(state.queue)}")
         for idx, item in enumerate(state.queue, 1):
             print(f"  {idx}. [{item.machine}] {item.pane_id}: {item.title or 'Untitled'}")

@@ -56,39 +56,14 @@ class QueueState:
         return True
 
     def pop_next(self, current_pane_id: str | None = None) -> QueueItem | None:
-        """Pop the next waiting agent. Skip current_pane_id if at head."""
-        return self.pop_next_local(current_machine="Local", current_pane_id=current_pane_id)
-
-    def pop_next_local(
-        self,
-        current_machine: str = "Local",
-        current_pane_id: str | None = None,
-        fallback_to_any: bool = True,
-    ) -> QueueItem | None:
-        """Pop the next waiting agent. Prioritizes current_machine, then falls back to any."""
+        """Pop the next waiting agent in FIFO order. Skips current_pane_id if at head."""
         self.load()
         if not self.queue:
             return None
 
-        target_idx = None
-        for idx, item in enumerate(self.queue):
-            is_match = (
-                item.machine == current_machine
-                or item.machine == "Local"
-                or (current_machine == "notebook" and item.machine in ("Local", "notebook"))
-            )
-            if is_match:
-                if current_pane_id and len(self.queue) > 1 and item.pane_id == current_pane_id:
-                    continue
-                target_idx = idx
-                break
-
-        if target_idx is None:
-            if not fallback_to_any:
-                return None
-            target_idx = 0
-            if current_pane_id and len(self.queue) > 1 and self.queue[0].pane_id == current_pane_id:
-                target_idx = 1
+        target_idx = 0
+        if current_pane_id and len(self.queue) > 1 and self.queue[0].pane_id == current_pane_id:
+            target_idx = 1
 
         item = self.queue.pop(target_idx)
         self.history.append(item)
@@ -97,9 +72,30 @@ class QueueState:
         self.save()
         return item
 
+    def pop_next_local(
+        self,
+        current_machine: str = "Local",
+        current_pane_id: str | None = None,
+        fallback_to_any: bool = True,
+    ) -> QueueItem | None:
+        """Backwards-compatible pop_next across waiting agents."""
+        return self.pop_next(current_pane_id=current_pane_id)
+
     def pop_prev(self, current_pane_id: str | None = None) -> QueueItem | None:
-        """Backtrack to the previously visited agent in history."""
-        return self.pop_prev_local(current_machine="Local", current_pane_id=current_pane_id)
+        """Backtrack to the most recently visited agent in history."""
+        self.load()
+        if not self.history:
+            return None
+
+        target_idx = len(self.history) - 1
+        if current_pane_id and self.history[target_idx].pane_id == current_pane_id:
+            if len(self.history) < 2:
+                return None
+            target_idx = len(self.history) - 2
+
+        item = self.history.pop(target_idx)
+        self.save()
+        return item
 
     def pop_prev_local(
         self,
@@ -107,37 +103,8 @@ class QueueState:
         current_pane_id: str | None = None,
         fallback_to_any: bool = True,
     ) -> QueueItem | None:
-        """Backtrack to previous agent. Prioritizes current_machine, then falls back to any."""
-        self.load()
-        if not self.history:
-            return None
-
-        target_idx = None
-        for idx in range(len(self.history) - 1, -1, -1):
-            item = self.history[idx]
-            is_match = (
-                item.machine == current_machine
-                or item.machine == "Local"
-                or (current_machine == "notebook" and item.machine in ("Local", "notebook"))
-            )
-            if is_match:
-                if current_pane_id and item.pane_id == current_pane_id:
-                    continue
-                target_idx = idx
-                break
-
-        if target_idx is None:
-            if not fallback_to_any:
-                return None
-            target_idx = len(self.history) - 1
-            if current_pane_id and self.history[target_idx].pane_id == current_pane_id:
-                if len(self.history) < 2:
-                    return None
-                target_idx = len(self.history) - 2
-
-        item = self.history.pop(target_idx)
-        self.save()
-        return item
+        """Backwards-compatible pop_prev across history."""
+        return self.pop_prev(current_pane_id=current_pane_id)
 
     def remove(self, pane_id: str, machine: str | None = None) -> None:
         """Remove a pane from queue when user manually visits or closes it."""

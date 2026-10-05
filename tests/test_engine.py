@@ -143,10 +143,32 @@ class TestQueueEngine(unittest.TestCase):
         self.assertFalse(self.state.auto_advance)
         self.mock_client.show_toast.assert_called_with(
             "⏸ Autopilot: OFF",
-            body="Manual mode: press Option+Right (⌥→) to advance.",
+            body="Manual mode: press Option+n (⌥n) to advance.",
             sound="request",
             position="top-right",
         )
+
+    def test_remote_agents_seeded_when_cache_populates(self):
+        engine = QueueEngine(self.state, self.mock_client)
+
+        # Tick 1: Remote cache is still empty
+        self.mock_client.list_agents.side_effect = lambda m: [
+            {"pane_id": "p1", "tab_id": "t1", "agent_status": "working", "focused": True, "title": "Local"}
+        ] if m == "Local" else []
+
+        engine.tick()
+        self.assertEqual(len(self.state.queue), 0)
+
+        # Tick 2: Background thread populated remote cache with waiting agent in scrape feature
+        engine._remote_cache["notebook"] = [
+            {"pane_id": "wQ:p2", "tab_id": "wQ:t2", "workspace_id": "wQ", "agent_status": "idle", "focused": False, "title": "Scrape Task"}
+        ]
+
+        engine.tick()
+        # Newly discovered remote waiting agent should now be seeded!
+        self.assertEqual(len(self.state.queue), 1)
+        self.assertEqual(self.state.queue[0].pane_id, "wQ:p2")
+        self.assertEqual(self.state.queue[0].machine, "notebook")
 
     def test_show_status(self):
         engine = QueueEngine(self.state, self.mock_client)

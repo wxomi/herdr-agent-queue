@@ -74,9 +74,6 @@ class QueueEngine:
                 all_current.append((m, a))
                 if a.get("focused") and not new_focused:
                     new_focused = (m, pid)
-
-        is_initial_tick = len(self.last_status) == 0
-
         # Detect transitions
         for m, a in all_current:
             pid = a["pane_id"]
@@ -84,8 +81,8 @@ class QueueEngine:
             key = (m, pid)
             prev_status = self.last_status.get(key)
 
-            if is_initial_tick:
-                # Seed any existing waiting agent not currently focused
+            if prev_status is None:
+                # Seed any existing waiting agent not currently focused (initial tick or newly discovered machine)
                 if curr_status in ("idle", "blocked", "done") and new_focused != key:
                     item = QueueItem(
                         machine=m,
@@ -95,7 +92,7 @@ class QueueEngine:
                         title=a.get("title") or a.get("display_agent", ""),
                     )
                     self.state.push(item)
-            elif prev_status is not None and prev_status != curr_status:
+            elif prev_status != curr_status:
                 # 1. Completion transition: was working -> now idle/blocked/done
                 if prev_status == "working" and curr_status in ("idle", "blocked", "done"):
                     # Only queue if user is not actively focused on this pane
@@ -279,7 +276,7 @@ class QueueEngine:
         body_text = (
             "Conveyor mode active: auto-advances to next waiting agent on reply."
             if enabled
-            else "Manual mode: press Option+Right (⌥→) to advance."
+            else "Manual mode: press Option+n (⌥n) to advance."
         )
         sound = "done" if enabled else "request"
 
