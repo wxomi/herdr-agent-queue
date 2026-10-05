@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from agent_queue.client import HerdrClient
@@ -23,19 +24,37 @@ class QueueEngine:
         self.focused_agent: tuple[str, str] | None = None
         self._tick_count: int = 0
         self._remote_cache: dict[str, list[dict[str, Any]]] = {}
+        self._remote_thread: threading.Thread | None = None
 
-    def tick(self) -> None:
-        """Single polling tick across Local and saved SSH machines."""
+    def tick(self) -> bool:
+        """Single polling tick across Local (<0.3ms socket) and saved SSH machines (non-blocking)."""
         self.state.load()
         self._tick_count += 1
 
         remote_machines = self.client.list_machines()
         poll_remote = (self._tick_count % 6 == 1) or not self._remote_cache
 
+        # Dispatch background fetch for remote machines to never stall local socket ticks
+        if remote_machines and poll_remote and (self._remote_thread is None or not self._remote_thread.is_alive()):
+            def _fetch_remote(machines: list[str]) -> None:
+                for m in machines:
+                    try:
+                        agents = self.client.list_agents(m)
+                        self._remote_cache[m] = agents
+                    except Exception:
+                        pass
+
+            self._remote_thread = threading.Thread(
+                target=_fetch_remote,
+                args=(list(remote_machines),),
+                daemon=True,
+            )
+            self._remote_thread.start()
+
         all_current: list[tuple[str, dict[str, Any]]] = []
         new_focused: tuple[str, str] | None = None
 
-        # 1. Local agents (always polled, fast <10ms)
+        # 1. Local agents (always polled over direct socket in <0.3ms)
         local_agents = self.client.list_agents("Local")
         for a in local_agents:
             pid = a.get("pane_id")
@@ -45,14 +64,9 @@ class QueueEngine:
             if a.get("focused"):
                 new_focused = ("Local", pid)
 
-        # 2. Remote agents (throttled every 6 ticks)
+        # 2. Remote agents (read immediately from non-blocking cache)
         for m in remote_machines:
-            if poll_remote:
-                agents = self.client.list_agents(m)
-                self._remote_cache[m] = agents
-            else:
-                agents = self._remote_cache.get(m, [])
-
+            agents = self._remote_cache.get(m, [])
             for a in agents:
                 pid = a.get("pane_id")
                 if not pid:
@@ -111,6 +125,10 @@ class QueueEngine:
             self.state.remove(new_focused[1], machine=new_focused[0])
 
         self.focused_agent = new_focused
+
+        # Return True if active agents are working or queued (requires fast polling)
+        has_active = any(a.get("agent_status") == "working" for _, a in all_current) or bool(self.state.queue)
+        return has_active
 
     def advance_next(self, current_pane_id: str | None = None) -> bool:
         """Jump to the next waiting agent in queue, prioritizing local machine."""

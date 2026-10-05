@@ -21,6 +21,7 @@ SOCKET_PATH = os.environ.get(
 # Timing & Defaults
 DEFAULT_AUTO_ADVANCE = False  # Manual reflex by default
 POLL_INTERVAL = float(os.environ.get("HERDR_AGENT_QUEUE_INTERVAL", "0.5"))
+IDLE_POLL_INTERVAL = float(os.environ.get("HERDR_AGENT_QUEUE_IDLE_INTERVAL", "1.5"))
 
 
 def herdr_bin() -> str:

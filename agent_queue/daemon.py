@@ -10,7 +10,7 @@ import sys
 import time
 
 from agent_queue.client import HerdrClient
-from agent_queue.config import LOCK_FILE, POLL_INTERVAL, STATE_DIR, STATE_FILE
+from agent_queue.config import IDLE_POLL_INTERVAL, LOCK_FILE, POLL_INTERVAL, STATE_DIR, STATE_FILE
 from agent_queue.engine import QueueEngine
 from agent_queue.state import QueueState
 
@@ -86,7 +86,7 @@ def start_daemon() -> int:
 
 
 def run_daemon() -> int:
-    """Run continuous polling loop until interrupted."""
+    """Run continuous polling loop until interrupted or Herdr server restarts/exits."""
     lock = acquire_lock()
     if lock is None:
         return 0
@@ -95,10 +95,29 @@ def run_daemon() -> int:
     client = HerdrClient()
     engine = QueueEngine(state, client)
 
+    initial_server = client.server_identity()
+    consecutive_misses = 0
+
     try:
         while True:
-            engine.tick()
-            time.sleep(POLL_INTERVAL)
+            # Check Herdr socket lifecycle
+            curr_server = client.server_identity()
+            if curr_server is not None:
+                consecutive_misses = 0
+                if initial_server is None:
+                    initial_server = curr_server
+                elif curr_server != initial_server:
+                    # Socket inode changed: Herdr restarted or successor launched
+                    break
+            else:
+                consecutive_misses += 1
+                if consecutive_misses >= 10:
+                    # Socket absent for > 5-15s: clean exit
+                    break
+
+            has_active = engine.tick()
+            sleep_duration = POLL_INTERVAL if has_active else IDLE_POLL_INTERVAL
+            time.sleep(sleep_duration)
     except KeyboardInterrupt:
         return 0
     finally:
