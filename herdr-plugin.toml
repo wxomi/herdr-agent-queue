@@ -8,21 +8,25 @@ platforms = ["linux", "macos"]
 [[actions]]
 id = "next"
 title = "Jump to next agent in attention queue"
+contexts = ["global"]
 command = ["./run.sh", "next"]
 
 [[actions]]
 id = "prev"
 title = "Jump to previous agent in attention queue"
+contexts = ["global"]
 command = ["./run.sh", "prev"]
 
 [[actions]]
 id = "toggle"
 title = "Toggle autopilot auto-advance on reply"
+contexts = ["global"]
 command = ["./run.sh", "toggle"]
 
 [[actions]]
 id = "status"
 title = "Show attention queue status"
+contexts = ["global"]
 command = ["./run.sh", "status"]
 
 [[startup]]

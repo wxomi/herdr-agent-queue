@@ -9,6 +9,7 @@ from agent_queue.client import HerdrClient
 from agent_queue.config import STATE_FILE
 from agent_queue.daemon import get_daemon_status, run_daemon, start_daemon, stop_daemon
 from agent_queue.engine import QueueEngine
+from agent_queue.native_jump import restore_this_space, set_waiting_view
 from agent_queue.state import QueueState
 
 
@@ -36,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "--watch":
         return run_daemon()
 
+    if cmd == "--rpc":
+        from agent_queue.native_jump import serve_rpc
+        serve_rpc()
+        return 0
+
     if cmd == "--start":
         start_daemon()
         print("Agent queue daemon started in background.")
@@ -53,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Agent queue daemon restarted.")
         return 0
 
+    if cmd in ("view-waiting", "view-restore"):
+        client = HerdrClient()
+        ok = set_waiting_view(client) if cmd == "view-waiting" else restore_this_space(client)
+        return 0 if ok else 1
+
     # Actions that require engine
     state = QueueState(STATE_FILE)
     client = HerdrClient()
@@ -68,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "toggle":
         enabled = engine.toggle_auto()
-        print(f"Autopilot: {'ENABLED (auto-advancing on reply)' if enabled else 'DISABLED (manual Option+n)'}")
+        print(f"Autopilot: {'ENABLED' if enabled else 'DISABLED (manual Option+n)'}")
         return 0
 
     if cmd == "status":
@@ -79,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Daemon: {'RUNNING (PID ' + str(daemon_status['pid']) + ')' if daemon_status['running'] else 'STOPPED'}"
         )
         print(status_line)
-        print(f"Autopilot: {'ENABLED (auto-advances on reply)' if state.auto_advance else 'DISABLED (manual Option+n)'}")
+        print(f"Autopilot: {'ENABLED' if state.auto_advance else 'DISABLED (manual Option+n)'}")
         print(f"Queue count: {len(state.queue)}")
         for idx, item in enumerate(state.queue, 1):
             print(f"  {idx}. [{item.machine}] {item.pane_id}: {item.title or 'Untitled'}")

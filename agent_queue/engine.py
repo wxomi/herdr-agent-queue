@@ -4,20 +4,37 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from agent_queue.client import HerdrClient
+from agent_queue.native_jump import (
+    client_typing_fingerprint,
+    jump_back,
+    jump_to_waiting,
+    clear_forward,
+    open_finished,
+    remember_back,
+    screen_machine,
+    take_expected,
+)
 from agent_queue.state import QueueItem, QueueState
 
 logger = logging.getLogger(__name__)
+
+# herdr's effective status: "done" means finished and not yet seen, "idle" means seen.
+WAITING = ("done", "blocked")
+# A pause shorter than this is still "in the middle of typing."
+TYPING_QUIET_SECONDS = 12
 
 
 class QueueEngine:
     """Monitors agent status transitions across machines and handles dispatching."""
 
-    def __init__(self, state: QueueState, client: HerdrClient):
+    def __init__(self, state: QueueState, client: HerdrClient, jump_native=None):
         self.state = state
         self.client = client
+        self.jump_native = jump_native if jump_native is not None else jump_to_waiting
         # Map of (machine, pane_id) -> status ("idle", "working", "blocked", "done")
         self.last_status: dict[tuple[str, str], str] = {}
         # Currently focused (machine, pane_id)
@@ -25,11 +42,17 @@ class QueueEngine:
         self._tick_count: int = 0
         self._remote_cache: dict[str, list[dict[str, Any]]] = {}
         self._remote_thread: threading.Thread | None = None
+        self._pending_finish: tuple[str, dict[str, Any]] | None = None
+        self._typed_fp: str | None = None
+        self._typed_at: float = 0.0
+        self._shown_snapshot: dict[str, Any] | None = None
 
     def tick(self) -> bool:
         """Single polling tick across Local (<0.3ms socket) and saved SSH machines (non-blocking)."""
         self.state.load()
         self._tick_count += 1
+        if self.state.auto_advance:
+            self._note_typing()
 
         remote_machines = self.client.list_machines()
         poll_remote = (self._tick_count % 6 == 1) or not self._remote_cache
@@ -86,7 +109,7 @@ class QueueEngine:
 
             if prev_status is None:
                 # Seed any existing waiting agent not currently focused (initial tick or newly discovered machine)
-                if curr_status in ("idle", "blocked", "done") and new_focused != key:
+                if curr_status in WAITING and new_focused != key:
                     item = QueueItem(
                         machine=m,
                         pane_id=pid,
@@ -98,7 +121,7 @@ class QueueEngine:
                     to_seed.append(item)
             elif prev_status != curr_status:
                 # 1. Completion transition: was working -> now idle/blocked/done
-                if prev_status == "working" and curr_status in ("idle", "blocked", "done"):
+                if prev_status not in WAITING and curr_status in WAITING:
                     # Only queue if user is not actively focused on this pane
                     if self.focused_agent != key:
                         self.state.remove_from_history(pid, machine=m)
@@ -121,7 +144,26 @@ class QueueEngine:
                     if self.state.auto_advance:
                         self.advance_next(current_pane_id=pid)
 
+                # Remember a finish. Open it only once the user has stopped typing.
+                if (
+                    self.state.auto_advance
+                    and prev_status == "working"
+                    and curr_status in ("idle", "done", "blocked")
+                    and self.focused_agent != key
+                    and self._pending_finish is None
+                ):
+                    self._pending_finish = (m, a)
+
+                if (
+                    self.focused_agent == key
+                    and curr_status == "working"
+                    and self.state.auto_advance
+                ):
+                    self._pending_finish = None
+
             self.last_status[key] = curr_status
+
+        self._open_pending(all_current)
 
         # Push seeded items: sort by state_change_seq descending (most recent first)
         # and do not re-seed items already in visited history
@@ -130,184 +172,173 @@ class QueueEngine:
             for item in to_seed:
                 self.state.push(item, check_history=True)
 
+        # Drop queued agents that are no longer waiting (seen, working again, or gone).
+        # Only judge machines we actually have data for this tick.
+        seen_machines = {"Local"} | {m for m in remote_machines if m in self._remote_cache}
+        current_status = {(m, a["pane_id"]): a.get("agent_status") for m, a in all_current}
+        for q in list(self.state.queue):
+            if q.machine in seen_machines and current_status.get((q.machine, q.pane_id)) not in WAITING:
+                self.state.remove(q.pane_id, machine=q.machine)
+
         # If user manually focused a pane, remove it from waiting queue
         if new_focused:
             self.state.remove(new_focused[1], machine=new_focused[0])
 
         self.focused_agent = new_focused
+        self._remember_switch(all_current)
 
         # Return True if active agents are working or queued (requires fast polling)
         has_active = any(a.get("agent_status") == "working" for _, a in all_current) or bool(self.state.queue)
         return has_active
 
-    def advance_next(self, current_pane_id: str | None = None) -> bool:
-        """Jump to the next waiting agent in queue, prioritizing local machine."""
-        item = self.state.pop_next_local(current_machine="Local", current_pane_id=current_pane_id)
+    def _remember_switch(self, all_current: list[tuple[str, dict[str, Any]]]) -> None:
+        """Option+p returns to the session a manual switch just left."""
+        shown = self._shown_agent(all_current)
+        if not shown or not shown.get("pane_id"):
+            return
+        if take_expected(shown["pane_id"]):
+            self._shown_snapshot = shown
+            return
+        prev = self._shown_snapshot
+        self._shown_snapshot = shown
+        if not prev or prev.get("pane_id") == shown.get("pane_id"):
+            return
+        remember_back(prev, prev.get("machine") or "Local")
+        clear_forward()
+
+    def _note_typing(self) -> None:
+        fp = client_typing_fingerprint()
+        if fp != self._typed_fp:
+            self._typed_fp = fp
+            self._typed_at = time.monotonic()
+
+    def _typing_quiet(self) -> bool:
+        if self._typed_fp is None:
+            return False
+        return time.monotonic() - self._typed_at >= TYPING_QUIET_SECONDS
+
+    def _open_pending(self, all_current: list[tuple[str, dict[str, Any]]]) -> None:
+        pending = self._pending_finish
+        if not pending:
+            return
+        machine, agent = pending
+        pane = agent.get("pane_id")
+        status = next(
+            (a.get("agent_status") for m, a in all_current if m == machine and a.get("pane_id") == pane),
+            None,
+        )
+        if status not in ("idle", "done", "blocked"):
+            self._pending_finish = None
+            return
+        if not self._parked(all_current):
+            return
+        shown = self._shown_agent(all_current)
+        if shown and shown.get("pane_id") == pane:
+            self._pending_finish = None
+            return
+        if open_finished(self.client, machine, agent, shown):
+            self._pending_finish = None
+
+    def _parked(self, all_current: list[tuple[str, dict[str, Any]]]) -> bool:
+        """True when the session on screen is idle and the user has stopped typing."""
+        if not self._typing_quiet():
+            return False
+        showing = (screen_machine() or "local").lower()
+        if showing in ("", "local"):
+            for machine, agent in all_current:
+                if machine == "Local" and agent.get("focused"):
+                    return agent.get("agent_status") == "idle"
+            return False
+        for machine, agent in all_current:
+            if machine.lower() == showing and agent.get("focused"):
+                return agent.get("agent_status") == "idle"
+        return False
+
+    def _shown_agent(self, all_current: list[tuple[str, dict[str, Any]]]) -> dict[str, Any] | None:
+        showing = (screen_machine() or "local").lower()
+        want = "Local" if showing in ("", "local") else showing
+        for machine, agent in all_current:
+            if agent.get("focused") and (machine == want or machine.lower() == want):
+                return {**agent, "machine": machine}
+        return None
+
+    def _remaining_text(self) -> str:
+        local_rem = sum(1 for q in self.state.queue if q.machine == "Local")
+        remote_rem = len(self.state.queue) - local_rem
+        parts = []
+        if local_rem:
+            parts.append(f"{local_rem} local left")
+        if remote_rem:
+            parts.append(f"{remote_rem} on remote")
+        return " • ".join(parts) if parts else "Queue now empty"
+
+    def _go(self, item: QueueItem, label: str) -> None:
+        """Focus a queue item. Plugins cannot switch the client to another machine,
+        so remote items are pre-focused in the background and announced instead."""
         auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
-        if item:
+        title = item.title or item.pane_id
+        if item.machine == "Local":
             self.client.focus_agent(
                 item.pane_id,
                 tab_id=item.tab_id,
                 workspace_id=item.workspace_id,
                 machine=item.machine,
             )
-            local_rem = sum(1 for q in self.state.queue if q.machine == "Local")
-            remote_rem = len(self.state.queue) - local_rem
-            rem_parts = []
-            if local_rem > 0:
-                rem_parts.append(f"{local_rem} local left")
-            elif item.machine == "Local":
-                rem_parts.append("Local queue clear")
-            if remote_rem > 0:
-                rem_parts.append(f"{remote_rem} on remote")
-            rem_text = " • ".join(rem_parts) if rem_parts else "Queue now empty"
-
             self.client.show_toast(
-                f"Next: {item.title or item.pane_id}",
-                body=f"[{item.machine}] {rem_text} | {auto_badge}",
+                f"{label}: {title}",
+                body=f"{self._remaining_text()} | {auto_badge}",
                 sound="none",
                 position="top-right",
             )
-            return True
+            return
 
-        # Fallback: Attention queue has no waiting agents. Cycle local waiting agents!
-        return self._cycle_agents(direction=1, current_pane_id=current_pane_id)
-
-    def advance_prev(self, current_pane_id: str | None = None) -> bool:
-        """Backtrack to the previously visited agent in queue history, or fallback to reverse cycling."""
-        item = self.state.pop_prev_local(current_machine="Local", current_pane_id=current_pane_id)
-        auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
-        if item:
-            self.client.focus_agent(
-                item.pane_id,
-                tab_id=item.tab_id,
-                workspace_id=item.workspace_id,
-                machine=item.machine,
-            )
-            self.client.show_toast(
-                f"Backtrack: {item.title or item.pane_id}",
-                body=f"[{item.machine}] Returned to previous agent • {auto_badge}",
-                sound="none",
-                position="top-right",
-            )
-            return True
-
-        # Fallback: History is empty. Cycle backwards through waiting agents.
-        return self._cycle_agents(direction=-1, current_pane_id=current_pane_id)
-
-    def _cycle_agents(self, direction: int, current_pane_id: str | None = None) -> bool:
-        """Cycle through waiting agents when queue/history is empty."""
-        all_agents: list[tuple[str, dict[str, Any]]] = []
-        for a in self.client.list_agents("Local"):
-            if a.get("pane_id"):
-                all_agents.append(("Local", a))
-
-        for m in self.client.list_machines():
-            remote_agents = self._remote_cache.get(m, [])
-            if not remote_agents:
-                try:
-                    remote_agents = self.client.list_agents(m)
-                    self._remote_cache[m] = remote_agents
-                except Exception:
-                    pass
-            for a in remote_agents:
-                if a.get("pane_id"):
-                    all_agents.append((m, a))
-
-        if not all_agents:
-            self.client.show_toast(
-                "No agents found",
-                body="No running agents detected on this or remote machines.",
-                sound="none",
-                position="top-right",
-            )
-            return False
-
-        # Identify currently focused pane if not explicitly given
-        current_pid = current_pane_id
-        if not current_pid:
-            for m, a in all_agents:
-                if a.get("focused"):
-                    current_pid = a.get("pane_id")
-                    break
-
-        # Prioritize agents waiting for input (idle, blocked, done)
-        waiting = [
-            (m, a) for m, a in all_agents
-            if a.get("agent_status") in ("idle", "blocked", "done")
-        ]
-        # Sort waiting agents by state_change_seq descending (most recent first)
-        waiting.sort(key=lambda pair: int(pair[1].get("state_change_seq") or 0), reverse=True)
-
-        pool = waiting if waiting else all_agents
-
-        # If only 1 agent in pool and it's already current
-        if len(pool) == 1 and pool[0][1].get("pane_id") == current_pid:
-            self.client.show_toast(
-                "Only 1 agent available",
-                body=pool[0][1].get("title") or pool[0][1].get("pane_id", ""),
-                sound="none",
-                position="top-right",
-            )
-            return False
-
-        # Find current index in pool
-        curr_idx = -1
-        for idx, (m, a) in enumerate(pool):
-            if a.get("pane_id") == current_pid:
-                curr_idx = idx
-                break
-
-        if curr_idx == -1:
-            target_idx = 0 if direction > 0 else len(pool) - 1
-        else:
-            target_idx = (curr_idx + direction) % len(pool)
-            if len(pool) > 1 and pool[target_idx][1].get("pane_id") == current_pid:
-                target_idx = (target_idx + direction) % len(pool)
-
-        target_machine, target = pool[target_idx]
-        target_pid = str(target.get("pane_id", ""))
-        target_tab = str(target.get("tab_id", "") or "")
-        target_ws = str(target.get("workspace_id", "") or "")
-        target_title = str(target.get("title") or target.get("display_agent", "") or "")
-        status_desc = str(target.get("agent_status") or "active")
-
-        self.client.focus_agent(
-            target_pid,
-            tab_id=target_tab,
-            workspace_id=target_ws,
-            machine=target_machine,
+        self.client.prefocus_remote_async(
+            item.machine,
+            item.pane_id,
+            tab_id=item.tab_id,
+            workspace_id=item.workspace_id,
         )
-
-        hist_item = QueueItem(
-            machine=target_machine,
-            pane_id=target_pid,
-            tab_id=target_tab,
-            workspace_id=target_ws,
-            title=target_title,
-            seq=int(target.get("state_change_seq") or 0),
-        )
-        self.state.history.append(hist_item)
-        if len(self.state.history) > 30:
-            self.state.history.pop(0)
-        self.state.save()
-
-        action_name = "Next" if direction > 0 else "Prev"
-        auto_badge = "⚡ Auto: ON" if self.state.auto_advance else "⏸ Auto: OFF"
         self.client.show_toast(
-            f"{action_name}: {target_title or target_pid}",
-            body=f"[{target_machine}] [{status_desc}] {auto_badge}",
+            f"On {item.machine}: {title}",
+            body=f"Switch to {item.machine} (prefix+w), it's focused there • {self._remaining_text()}",
             sound="none",
             position="top-right",
         )
-        return True
+
+    def advance_next(self, current_pane_id: str | None = None) -> bool:
+        """Go to the next agent waiting on the user, on any machine."""
+        # Native navigation first: it uses herdr's own unseen tracking, which the sidebar
+        # dots follow and agent.list does not always reflect.
+        if self.jump_native(self.client):
+            return True
+
+        item = self.state.pop_next(current_pane_id=current_pane_id)
+        if item:
+            self._go(item, "Next")
+            return True
+        self._nothing("No agents waiting on you")
+        return False
+
+    def advance_prev(self, current_pane_id: str | None = None) -> bool:
+        """Go back to the agent Option+n just left."""
+        if jump_back(self.client):
+            return True
+        item = self.state.pop_prev(current_pane_id=current_pane_id)
+        if item:
+            self._go(item, "Back")
+            return True
+        self._nothing("No earlier agent in history")
+        return False
+
+    def _nothing(self, title: str) -> None:
+        self.client.show_toast(title, body=self._remaining_text(), sound="none", position="top-right")
 
     def toggle_auto(self) -> bool:
         """Toggle autopilot auto-advance on reply submission."""
         enabled = self.state.toggle_auto_advance()
         status_tag = "⚡ Autopilot: ON" if enabled else "⏸ Autopilot: OFF"
         body_text = (
-            "Conveyor mode active: auto-advances to next waiting agent on reply."
+            "Jumps when you send a reply, and when another agent finishes while you sit in an idle session."
             if enabled
             else "Manual mode: press Option+n (⌥n) to advance."
         )

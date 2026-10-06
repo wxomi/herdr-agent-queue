@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from agent_queue.client import HerdrClient
@@ -93,13 +94,24 @@ def run_daemon() -> int:
 
     state = QueueState(STATE_FILE)
     client = HerdrClient()
+    if sys.platform == "darwin":
+        from agent_queue.native_jump import ensure_back_bridge
+        ensure_back_bridge(client)
     engine = QueueEngine(state, client)
+    if sys.platform != "darwin" and not os.environ.get("HERDR_QUEUE_NO_BRIDGE"):
+        from agent_queue.native_jump import serve_rpc
+        threading.Thread(target=serve_rpc, daemon=True).start()
 
     initial_server = client.server_identity()
     consecutive_misses = 0
+    last_bridge = time.monotonic()
 
     try:
         while True:
+            if sys.platform == "darwin" and time.monotonic() - last_bridge > 20:
+                from agent_queue.native_jump import ensure_back_bridge
+                ensure_back_bridge(client)
+                last_bridge = time.monotonic()
             # Check Herdr socket lifecycle
             curr_server = client.server_identity()
             if curr_server is not None:

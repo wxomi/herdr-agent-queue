@@ -1,6 +1,7 @@
 """Unit tests for agent_queue configuration."""
 
 import os
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,21 @@ class TestConfig(unittest.TestCase):
         # Re-evaluate or test config interval override
         interval = float(os.environ.get("HERDR_AGENT_QUEUE_INTERVAL", "1.0"))
         self.assertEqual(interval, 2.5)
+
+    def test_manifest_next_prev_are_global_actions(self):
+        manifest_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "herdr-plugin.toml",
+        )
+        with open(manifest_path, "rb") as fh:
+            manifest = tomllib.load(fh)
+        actions = {a["id"]: a for a in manifest.get("actions") or []}
+        for action_id in ("next", "prev", "toggle", "status"):
+            self.assertIn(
+                "global",
+                actions[action_id].get("contexts") or [],
+                f"{action_id} must be invokable from a focused pane via Option+n",
+            )
 
 
 if __name__ == "__main__":

@@ -96,7 +96,8 @@ class TestHerdrClient(unittest.TestCase):
         }
         mock_run.return_value = json.dumps(sample_response)
         client = HerdrClient(bin_path="herdr", sock_path=None)
-        agents = client.list_agents(machine="notebook")
+        with patch("agent_queue.native_jump.remote_agents", return_value=None):
+            agents = client.list_agents(machine="notebook")
         self.assertEqual(len(agents), 1)
         self.assertEqual(agents[0]["pane_id"], "wQ:p2")
         mock_run.assert_called_with(["herdr", "--machine", "notebook", "agent", "list"], timeout=3.0)

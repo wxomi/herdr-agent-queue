@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -100,6 +101,10 @@ class HerdrClient:
     def list_agents(self, machine: str | None = None) -> list[dict[str, Any]]:
         """List active agents on Local machine (via socket <0.3ms) or remote machine (via CLI)."""
         if machine and machine != "Local":
+            from agent_queue.native_jump import remote_agents
+            via_socket = remote_agents(machine, self.bin)
+            if via_socket is not None:
+                return via_socket
             cmd = [self.bin, "--machine", machine, "agent", "list"]
             raw = run_cmd(cmd, timeout=3.0)
             if not raw:
@@ -142,16 +147,6 @@ class HerdrClient:
             agent_res = run_cmd(base_cmd + ["agent", "focus", pane_id])
             if tab_id:
                 run_cmd(base_cmd + ["tab", "focus", tab_id])
-            if sys.platform == "darwin":
-                try:
-                    subprocess.run(
-                        ["osascript", "-e", 'tell application "System Events" to key code 45 using {option down}'],
-                        capture_output=True,
-                        timeout=1.0,
-                        check=False,
-                    )
-                except Exception:
-                    pass
             return bool(agent_res)
 
         # Local machine: use direct Unix domain socket (<1ms total)
@@ -172,6 +167,37 @@ class HerdrClient:
         if tab_id:
             run_cmd(base_cmd + ["tab", "focus", tab_id])
         return bool(agent_res)
+
+    def prefocus_remote_async(
+        self,
+        machine: str,
+        pane_id: str,
+        tab_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> None:
+        """Focus a remote pane on its own server without blocking (SSH round trips take seconds).
+
+        This cannot switch which machine the local client displays; it only makes the
+        remote server land on this pane when the user selects that machine.
+        """
+        base = [self.bin, "--machine", machine]
+        steps: list[list[str]] = []
+        if workspace_id:
+            steps.append(base + ["workspace", "focus", workspace_id])
+        steps.append(base + ["agent", "focus", pane_id])
+        if tab_id:
+            steps.append(base + ["tab", "focus", tab_id])
+        script = " ; ".join(shlex.join(s) for s in steps)
+        try:
+            subprocess.Popen(
+                ["/bin/sh", "-c", script],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
 
     def show_toast(
         self,
